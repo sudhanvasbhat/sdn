@@ -8,7 +8,7 @@ const int PORT_BROADCAST = 3;      // Packet is sent to all ports except incomin
 const int PORT_TO_HOST = 2;        // Packet is sent to port 2 (towards host)
 const int PORT_RING_FORWARD = 1;   // Packet is sent to port 1 if recieved on port 0 and vice versa
 
-const int CONFIGURED_IP = 4;       // Last decimal of IPv4 address, e.g. 10.0.0.4
+const int CONFIGURED_IP = 8;     // Last decimal of IPv4 address, e.g. 10.0.0.4
 
 // #define LOG printf
 #define LOG
@@ -62,6 +62,27 @@ void *move_pointer_by_n_bytes(void *p, size_t num_bytes) {
   return ((char *)p) + num_bytes;
 }
 
+
+int run_ipv4(int inPort, char* pointerToFirstByteInIPv4Header) {
+	struct rte_ipv4_hdr* ipHeader = (struct rte_ipv4_hdr*) pointerToFirstByteInIPv4Header;
+	rte_be32_t dst_addr = __bswap_32(ipHeader->dst_addr);
+	
+	void* tcpFrame = move_pointer_by_n_bytes(pointerToFirstByteInIPv4Header, sizeof(struct rte_ipv4_hdr));
+	struct rte_tcp_hdr* header = (struct rte_tcp_hdr*) tcpFrame;
+	
+	rte_be32_t cmp_dst_addr = dst_addr - 0xa000000;
+	
+	if (cmp_dst_addr == CONFIGURED_IP) {
+		return 2;
+	} else if (inPort == 2) {
+		return PORT_BROADCAST;
+	} else if (inPort == 0) {
+		return 1;
+	} else if (inPort == 1) {
+		return 0;
+	}
+}
+
 /**
  * @brief Receives a batch of packets from the interfaces
  * @param port the source port the packets came from
@@ -73,36 +94,35 @@ void push_batch(int port, struct rte_mbuf* batch[BURST_SIZE], size_t num_rx)
   for(unsigned int i=0; i<num_rx; ++i) {
     struct rte_ether_hdr* eth_hdr = rte_pktmbuf_mtod(batch[i], struct rte_ether_hdr*);
     
+    // TODO: Implement your forwarding logic here
     int dst_port = PORT_IGNORE_PACKET;
-
-    // if (rte_be_to_cpu_16(eth_hdr->ether_type) == RTE_ETHER_TYPE_ARP){
-    //   dst_port = PORT_BROADCAST;
-    // }
-    if (rte_be_to_cpu_16(eth_hdr->ether_type) == RTE_ETHER_TYPE_IPV4) {
-      struct rte_ipv4_hdr* ipv4_hdr = (struct rte_ipv4_hdr *)move_pointer_by_n_bytes(eth_hdr, sizeof(struct rte_ether_hdr));
-    
-        dst_port = PORT_TO_HOST;
-      } else {
-        // Forward the packet on the ring, i.e., on the other interface than it was received
-        dst_port = PORT_RING_FORWARD;
-        // TODO: Send the packet to dst_port using rte_eth_tx_burst or similar function
-      }
-
-    if (dst_port == PORT_BROADCAST) {
-      int sent = 0;
-      int portid;
-      RTE_ETH_FOREACH_DEV(portid) {
-        LOG("  sent packet %d to port %d\n", i, dst_port);
-        sent = sent |  rte_eth_tx_burst(portid, 0, &batch[i], 1);
-      }
-      if (sent == 0)
-        dst_port = -1;
+    dst_port = -1;
+    if(__bswap_16(eth_hdr->ether_type) == RTE_ETHER_TYPE_IPV4) {
+  
+    		dst_port = run_ipv4(port, ((char*)eth_hdr + sizeof(struct rte_ether_hdr)));
+    		if (dst_port == PORT_BROADCAST) {
+    			int portid;
+	    		rte_mbuf_refcnt_set(batch[i], 2);
+	    		RTE_ETH_FOREACH_DEV(portid) {
+	    			if (portid != port) {
+	    				rte_eth_tx_burst(portid, 0, &batch[i], 1);
+	    			}
+	    		}
+	    		break;
+    		}
+    		rte_eth_tx_burst(dst_port, 0, &batch[i], 1);
+    }		
+    else if(__bswap_16(eth_hdr->ether_type) == RTE_ETHER_TYPE_ARP){    	
+    		int portid;
+    		rte_mbuf_refcnt_set(batch[i], 2);
+    		RTE_ETH_FOREACH_DEV(portid) {
+    			if (portid != port) {
+    				rte_eth_tx_burst(portid, 0, &batch[i], 1);
+    			}
+    		}
     }
-    if (dst_port != -1 || dst_port != 3 ) {
-      LOG("  sent packet %d to port %d\n", i, dst_port);
-      int sent_pkt = rte_eth_tx_burst(dst_port, 0, &batch[i], 1);
-      }
-
-    // TODO: Implement your logic here
     }
+  
 }
+
+

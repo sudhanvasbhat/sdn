@@ -8,7 +8,7 @@ const int PORT_BROADCAST = 3;      // Packet is sent to all ports except incomin
 const int PORT_TO_HOST = 2;        // Packet is sent to port 2 (towards host)
 const int PORT_RING_FORWARD = 1;   // Packet is sent to port 1 if recieved on port 0 and vice versa
 
-const int CONFIGURED_IP = 8;     // Last decimal of IPv4 address, e.g. 10.0.0.4
+const int CONFIGURED_IP = 9;     // Last decimal of IPv4 address, e.g. 10.0.0.4
 
 // #define LOG printf
 #define LOG
@@ -73,7 +73,7 @@ int run_ipv4(int inPort, char* pointerToFirstByteInIPv4Header) {
 	rte_be32_t cmp_dst_addr = dst_addr - 0xa000000;
 	
 	if (cmp_dst_addr == CONFIGURED_IP) {
-		return 2;
+		return PORT_TO_HOST;
 	} else if (inPort == 2) {
 		return PORT_BROADCAST;
 	} else if (inPort == 0) {
@@ -94,9 +94,9 @@ void push_batch(int port, struct rte_mbuf* batch[BURST_SIZE], size_t num_rx)
   for(unsigned int i=0; i<num_rx; ++i) {
     struct rte_ether_hdr* eth_hdr = rte_pktmbuf_mtod(batch[i], struct rte_ether_hdr*);
     
-    // TODO: Implement your forwarding logic here
-    int dst_port = PORT_IGNORE_PACKET;
-    dst_port = -1;
+
+    int dst_port = PORT_IGNORE_PACKET;y
+   
     if(__bswap_16(eth_hdr->ether_type) == RTE_ETHER_TYPE_IPV4) {
   
     		dst_port = run_ipv4(port, ((char*)eth_hdr + sizeof(struct rte_ether_hdr)));
@@ -108,9 +108,13 @@ void push_batch(int port, struct rte_mbuf* batch[BURST_SIZE], size_t num_rx)
 	    				rte_eth_tx_burst(portid, 0, &batch[i], 1);
 	    			}
 	    		}
-	    		break;
-    		}
-    		rte_eth_tx_burst(dst_port, 0, &batch[i], 1);
+	    	}
+	    	else if (dst_port == PORT_TO_HOST) {
+	    		rte_eth_tx_burst(2, 0, &batch[i], 1);
+	    	}
+	    	else {
+	    		rte_eth_tx_burst(dst_port, 0, &batch[i], 1);
+	    	}
     }		
     else if(__bswap_16(eth_hdr->ether_type) == RTE_ETHER_TYPE_ARP){    	
     		int portid;
@@ -124,5 +128,3 @@ void push_batch(int port, struct rte_mbuf* batch[BURST_SIZE], size_t num_rx)
     }
   
 }
-
-
